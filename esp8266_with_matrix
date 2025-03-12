@@ -1,0 +1,151 @@
+//what this does: 
+//create wifi network with any name/passwords
+//displays the amount of devices connected to the esp
+//displays amount of trusted devices(if you are doing home automatization
+//to make a device trusted, access http://192.168.4.1/auth?ID=439629&Code=92462 while being connected to the esp
+//edit speed/brightness by accessing 192.168.4.1
+
+//matrix pins are:
+//VCC	> 3.3V
+//GND >	GND
+//DIN	> D7 (GPIO13)
+//CS	> D8 (GPIO15)
+//CLK	> D5 (GPIO14)
+
+
+
+
+
+
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <MD_Parola.h>
+#include <MD_MAX72XX.h>
+#include <SPI.h>
+
+// Wi-Fi Settings
+const char *ssid = "*ANY NAME*";
+const char *password = "*PASSWORD";
+
+// Matrix Display Settings
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+#define MAX_DEVICES 1  // Number of 8x8 matrix modules, set to one by default
+#define DATA_PIN   D7
+#define CS_PIN     D8
+#define CLK_PIN    D5
+
+MD_Parola display = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
+ESP8266WebServer server(80);
+
+// Trusted device credentials, optional
+const String trustedID = "439629";
+const String trustedCode = "92462";
+
+int trustedDevices = 0; // Counter for trusted devices
+int brightness = 5;      // Default brightness (0-15)
+int scrollSpeed = 100;   // Default scroll speed (0-200)
+
+void setup() {
+    Serial.begin(115200);
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(ssid, password);
+
+    Serial.println("Access Point Started");
+    Serial.print("SSID: "); Serial.println(ssid);
+    Serial.print("IP Address: "); Serial.println(WiFi.softAPIP());
+
+    display.begin();
+    display.setIntensity(brightness);
+    display.displayClear();
+
+    server.on("/", handleWebPage);
+    server.on("/update", handleSettings);
+    server.on("/auth", handleAuth); // Handle trusted device authentication
+    server.begin();
+}
+
+void loop() {
+    server.handleClient(); // Handle incoming web requests
+
+    int numDevices = WiFi.softAPgetStationNum(); // Count connected devices
+
+    // Show "Devices: X"
+    displayText("Devices: " + String(numDevices));
+    delay(2000);
+
+    // Show "Trusted: Y"
+    displayText("Trusted: " + String(trustedDevices));
+    delay(2000);
+}
+
+// Function to display scrolling text
+void displayText(String text) {
+    display.displayClear();
+    display.setTextAlignment(PA_CENTER);
+    display.setTextEffect(PA_SCROLL_LEFT, PA_SCROLL_LEFT);
+    display.displayText(text.c_str(), PA_CENTER, scrollSpeed, 2000, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
+
+    while (!display.displayAnimate()) {
+        delay(10);
+    }
+
+    display.displayReset();
+}
+
+// Handle main webpage
+void handleWebPage() {
+    String page = "<html><head><title>ESP Matrix Control</title>";
+    page += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    page += "<style>body{text-align:center;font-family:Arial;}input{width:80%;}</style>";
+    page += "</head><body><h2>ESP Matrix Control</h2>";
+
+    page += "<p>Brightness: <span id='brightnessValue'>" + String(brightness) + "</span></p>";
+    page += "<input type='range' min='0' max='15' value='" + String(brightness) + "' id='brightness' oninput='updateBrightness()'><br><br>";
+
+    page += "<p>Text Speed: <span id='speedValue'>" + String(scrollSpeed) + "</span></p>";
+    page += "<input type='range' min='0' max='200' value='" + String(scrollSpeed) + "' id='speed' oninput='updateSpeed()'><br><br>";
+
+    page += "<script>";
+    page += "function updateBrightness(){var b=document.getElementById('brightness').value;";
+    page += "document.getElementById('brightnessValue').innerText=b;";
+    page += "fetch('/update?brightness='+b);}";
+    
+    page += "function updateSpeed(){var s=document.getElementById('speed').value;";
+    page += "document.getElementById('speedValue').innerText=s;";
+    page += "fetch('/update?speed='+s);}";
+    page += "</script></body></html>";
+
+    server.send(200, "text/html", page);
+}
+
+// Handle brightness & speed update
+void handleSettings() {
+    if (server.hasArg("brightness")) {
+        brightness = server.arg("brightness").toInt();
+        display.setIntensity(brightness);
+        Serial.println("Updated Brightness: " + String(brightness));
+    }
+
+    if (server.hasArg("speed")) {
+        scrollSpeed = server.arg("speed").toInt();
+        Serial.println("Updated Scroll Speed: " + String(scrollSpeed));
+    }
+
+    server.send(200, "text/plain", "Settings Updated");
+}
+
+// Handle trusted device authentication
+void handleAuth() {
+    if (server.hasArg("ID") && server.hasArg("Code")) {
+        String receivedID = server.arg("ID");
+        String receivedCode = server.arg("Code");
+
+        if (receivedID == trustedID && receivedCode == trustedCode) {
+            trustedDevices++;
+            Serial.println("New trusted device authenticated!");
+            server.send(200, "text/plain", "Authenticated");
+            return;
+        }
+    }
+    server.send(403, "text/plain", "Unauthorized");
+}
